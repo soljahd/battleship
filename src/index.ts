@@ -1,6 +1,11 @@
-import { httpServer } from './http_server/index.js';
+import { startHttpServer } from './http_server/index.js';
+import { startWebsocketServer } from './ws_server/index.js';
+import { loadEnvFile } from 'node:process';
 
-const HTTP_PORT = 8181;
+loadEnvFile();
 
-console.log(`Start static http server on the ${String(HTTP_PORT)} port!`);
-httpServer.listen(HTTP_PORT);
+const WEB_SOCKET_PORT = Number(process.env['WEB_SOCKET_PORT'] || '3000');
+const HTTP_PORT = Number(process.env['HTTP_PORT'] || '8181');
+
+startWebsocketServer(WEB_SOCKET_PORT);
+startHttpServer(HTTP_PORT);
