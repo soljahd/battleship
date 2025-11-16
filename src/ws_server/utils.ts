@@ -32,7 +32,8 @@ export function updateRoomsBroadcast(connections: Map<WsWebSocket, string | null
 export function updateWinnersBroadcast(connections: Map<WsWebSocket, string | null>, users: Map<string, PlayerRecord>) {
   const winnersList = Array.from(users.values())
     .map((user) => ({ name: user.name, wins: user.wins }))
-    .filter(({ wins }) => wins > 0);
+    .filter(({ wins }) => wins > 0)
+    .sort((a, b) => b.wins - a.wins);
   broadcastToAll(connections, 'update_winners', winnersList);
 }
 
