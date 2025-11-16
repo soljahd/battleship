@@ -31,6 +31,23 @@ function handleReg(ws: WsWebSocket, { name, password }: RegRequestData) {
     send(ws, 'reg', { name: '', index: '', error: true, errorText: 'invalid credentials' });
     return;
   }
+  const existingUser = USERS.get(name);
+  if (existingUser && existingUser.ws && existingUser.ws !== ws) {
+    try {
+      existingUser.ws.close();
+      console.log(`Closed previous connection for user: ${name}`);
+    } catch (error) {
+      console.log(`Error closing previous connection for user: ${name}`, error);
+    }
+
+    for (const [connection, userName] of CONNECTIONS.entries()) {
+      if (userName === name && connection !== ws) {
+        CONNECTIONS.delete(connection);
+        break;
+      }
+    }
+  }
+
   const existing = USERS.get(name);
   if (!existing) {
     USERS.set(name, { name, password, wins: 0, ws });
