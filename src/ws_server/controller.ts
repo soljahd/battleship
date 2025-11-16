@@ -6,7 +6,8 @@ import {
   isAddShipsRequestData,
   isAttackRequestData,
 } from './typeGuard.js';
-import { CONNECTIONS, GAMES, USERS, WAITING_ROOMS } from './db.js';
+import { CONNECTIONS, deleteRoomByUser, GAMES, USERS, WAITING_ROOMS } from './db.js';
+import { buildShipCells, createEmptyBoard, safeSetCell } from './gameController.js';
 
 function send(ws: WsWebSocket | null | undefined, type: string, payload: unknown) {
   if (!ws) return;
@@ -65,6 +66,85 @@ function handleCreateRoom(ws: WsWebSocket) {
   updateRoomsBroadcast();
 }
 
+function handleAddUserToRoom(ws: WsWebSocket, { indexRoom }: AddUserToRoomRequestData) {
+  const who = CONNECTIONS.get(ws);
+  if (!who) return;
+  if (!indexRoom) return;
+  const room = WAITING_ROOMS.get(String(indexRoom));
+  if (!room) return;
+  if (room.users.includes(who)) return;
+  if (room.users.length >= 2) return;
+  room.users.push(who);
+  createGameFromRoom(room);
+  return;
+}
+
+export function createGameFromRoom(room: Room) {
+  const gameId = randomUUID();
+  const [user1, user2] = room.users;
+  if (!user1 || !user2) return;
+  const gp1: GamePlayer = {
+    userName: user1,
+    gamePlayerId: randomUUID(),
+    ws: null,
+    board: createEmptyBoard(),
+    ships: [],
+  };
+  const gp2: GamePlayer = {
+    userName: user2,
+    gamePlayerId: randomUUID(),
+    ws: null,
+    board: createEmptyBoard(),
+    ships: [],
+  };
+  for (const [ws, name] of CONNECTIONS.entries()) {
+    if (name === user1) gp1.ws = ws;
+    if (name === user2) gp2.ws = ws;
+  }
+  const game: Game = { gameId: gameId, players: [gp1, gp2], currentPlayer: gp1.gamePlayerId };
+  GAMES.set(gameId, game);
+  for (const player of game.players)
+    send(player.ws, 'create_game', { idGame: game.gameId, idPlayer: player.gamePlayerId });
+  WAITING_ROOMS.delete(room.roomId);
+  deleteRoomByUser(user2);
+  updateRoomsBroadcast();
+  return game;
+}
+
+function handleAddShips({ gameId, ships, indexPlayer }: AddShipsRequestData) {
+  const game = GAMES.get(String(gameId));
+  if (!game) return;
+  const gamePlayer = game.players.find((player) => player.gamePlayerId === String(indexPlayer));
+  if (!gamePlayer) return;
+  gamePlayer.ships = ships.map((ship: ShipSpec) => ({
+    id: randomUUID(),
+    type: ship.type,
+    cells: buildShipCells(ship.position, ship.direction, ship.length),
+    hits: [],
+    sunk: false,
+  }));
+  gamePlayer.board = gamePlayer.board ?? createEmptyBoard();
+
+  gamePlayer.board = gamePlayer.board ?? createEmptyBoard();
+
+  for (const ship of gamePlayer.ships ?? []) {
+    for (const cell of ship.cells) {
+      safeSetCell(gamePlayer.board, cell.x, cell.y, 'ship');
+    }
+  }
+
+  if (game.players.every((p) => p.ships && p.ships.length > 0)) {
+    game.currentPlayer = Math.random() < 0.5 ? game.players[0].gamePlayerId : game.players[1].gamePlayerId;
+    for (const player of game.players) {
+      send(player.ws, 'start_game', { ships: player.ships || [], currentPlayerIndex: game.currentPlayer });
+    }
+    for (const player of game.players) {
+      send(player.ws, 'turn', { currentPlayer: game.currentPlayer });
+    }
+  }
+  return;
+}
+
 export function handleCommand(ws: WsWebSocket, { type, data }: MsgEnvelope) {
   const dataParsed: unknown = data === '' ? '' : JSON.parse(data);
   switch (type) {
@@ -81,13 +161,13 @@ export function handleCommand(ws: WsWebSocket, { type, data }: MsgEnvelope) {
 
     case 'add_user_to_room': {
       const data = parseData<AddUserToRoomRequestData>(dataParsed, isAddUserToRoomRequestData);
-      if (data) console.log(data);
+      if (data) handleAddUserToRoom(ws, data);
       break;
     }
 
     case 'add_ships': {
       const data = parseData<AddShipsRequestData>(dataParsed, isAddShipsRequestData);
-      if (data) console.log(data);
+      if (data) handleAddShips(data);
       break;
     }
 
