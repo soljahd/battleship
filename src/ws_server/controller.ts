@@ -7,7 +7,14 @@ import {
   isAttackRequestData,
 } from './typeGuard.js';
 import { CONNECTIONS, deleteRoomByUser, GAMES, USERS, WAITING_ROOMS } from './db.js';
-import { buildShipCells, createEmptyBoard, safeSetCell } from './gameController.js';
+import {
+  BOARD_SIZE,
+  buildShipCells,
+  createEmptyBoard,
+  safeSetCell,
+  surroundingCells,
+  uniqueCells,
+} from './gameController.js';
 
 function send(ws: WsWebSocket | null | undefined, type: string, payload: unknown) {
   if (!ws) return;
@@ -133,7 +140,7 @@ function handleAddShips({ gameId, ships, indexPlayer }: AddShipsRequestData) {
     }
   }
 
-  if (game.players.every((p) => p.ships && p.ships.length > 0)) {
+  if (game.players.every((player) => player.ships && player.ships.length > 0)) {
     game.currentPlayer = Math.random() < 0.5 ? game.players[0].gamePlayerId : game.players[1].gamePlayerId;
     for (const player of game.players) {
       send(player.ws, 'start_game', { ships: player.ships || [], currentPlayerIndex: game.currentPlayer });
@@ -143,6 +150,74 @@ function handleAddShips({ gameId, ships, indexPlayer }: AddShipsRequestData) {
     }
   }
   return;
+}
+
+function handleAttack({ gameId, x, y, indexPlayer }: AttackRequestData) {
+  const attackerGpId = indexPlayer;
+  const game = GAMES.get(String(gameId));
+  if (!game || game.finished) return;
+  const attackerIdx = game.players.findIndex((player) => player.gamePlayerId === attackerGpId);
+  if (attackerIdx === -1) return;
+  const defenderIdx = attackerIdx === 0 ? 1 : 0;
+  const attacker = game.players[attackerIdx];
+  if (!attacker) throw new Error('attacker not found');
+  const defender = game.players[defenderIdx];
+  if (game.currentPlayer !== attackerGpId) return;
+  if (!defender.board) defender.board = createEmptyBoard();
+  if (!attacker.board) attacker.board = createEmptyBoard();
+  if (x < 0 || x >= BOARD_SIZE || y < 0 || y >= BOARD_SIZE) return;
+  if (!defender.ships) throw new Error('Ships does not set');
+
+  const ship = defender.ships.find((ship) => ship.cells.some((cell) => cell.x === x && cell.y === y));
+  if (ship) {
+    if (!ship.hits.some((h) => h.x === x && h.y === y)) ship.hits.push({ x, y });
+    if (defender.board[y] && defender.board[y][x]) defender.board[y][x] = 'hit';
+    if (ship.hits.length === ship.cells.length) {
+      ship.sunk = true;
+      const surrounds = uniqueCells(surroundingCells(ship.cells)).filter(
+        (cell) => !ship.cells.some((shipCell) => shipCell.x === cell.x && shipCell.y === cell.y),
+      );
+      for (const surround of surrounds) {
+        const row = defender.board[surround.y];
+        if (row && surround.x >= 0 && surround.x < row.length && row[surround.x] === 'empty')
+          safeSetCell(defender.board, surround.x, surround.y, 'miss');
+
+        for (const player of game.players)
+          send(player.ws, 'attack', { position: surround, currentPlayer: attacker.gamePlayerId, status: 'miss' });
+      }
+      for (const cell of ship.cells) {
+        safeSetCell(defender.board, cell.x, cell.y, 'killed');
+        for (const player of game.players)
+          send(player.ws, 'attack', { position: cell, currentPlayer: attacker.gamePlayerId, status: 'killed' });
+      }
+
+      const defenderAlive = defender.ships.some((ship) => !ship.sunk);
+      if (!defenderAlive) {
+        game.finished = true;
+        for (const player of game.players) send(player.ws, 'finish', { winPlayer: attacker.gamePlayerId });
+        const rec = USERS.get(attacker.userName);
+        if (rec) rec.wins = (rec.wins || 0) + 1;
+        GAMES.delete(String(gameId));
+        updateWinnersBroadcast();
+        updateRoomsBroadcast();
+        return;
+      } else {
+        for (const player of game.players) send(player.ws, 'turn', { currentPlayer: game.currentPlayer });
+        return;
+      }
+    } else {
+      for (const player of game.players)
+        send(player.ws, 'attack', { position: { x, y }, currentPlayer: attacker.gamePlayerId, status: 'shot' });
+      for (const player of game.players) send(player.ws, 'turn', { currentPlayer: game.currentPlayer });
+      return;
+    }
+  } else {
+    if (defender.board[y] && defender.board[y][x] === 'empty') defender.board[y][x] = 'miss';
+    for (const player of game.players)
+      send(player.ws, 'attack', { position: { x, y }, currentPlayer: attacker.gamePlayerId, status: 'miss' });
+    game.currentPlayer = defender.gamePlayerId;
+    for (const player of game.players) send(player.ws, 'turn', { currentPlayer: game.currentPlayer });
+  }
 }
 
 export function handleCommand(ws: WsWebSocket, { type, data }: MsgEnvelope) {
@@ -173,7 +248,7 @@ export function handleCommand(ws: WsWebSocket, { type, data }: MsgEnvelope) {
 
     case 'attack': {
       const data = parseData<AttackRequestData>(dataParsed, isAttackRequestData);
-      if (data) console.log(data);
+      if (data) handleAttack(data);
       break;
     }
 
