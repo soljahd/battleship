@@ -8,7 +8,8 @@ export function startWebsocketServer(port: number) {
   console.log(`Start WebSocket server on the ${String(port)} port!`);
 
   wss.on('connection', (ws: WsWebSocket) => {
-    CONNECTIONS.set(ws, null);
+    console.log('New client connected');
+    CONNECTIONS.set(ws, 'guest');
 
     ws.on('message', (raw) => {
       const text = Buffer.isBuffer(raw) ? raw.toString('utf-8') : typeof raw === 'string' ? raw : JSON.stringify(raw);

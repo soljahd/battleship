@@ -1,8 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import { createEmptyBoard } from './gameController.js';
+import { CONNECTIONS } from './db.js';
 
 export function send(ws: WsWebSocket | null | undefined, type: CmdType, payload: unknown) {
   if (!ws || ws.readyState !== ws.OPEN) return;
+
+  const message = {
+    type,
+    data: payload,
+    id: 0,
+  };
+
+  logOutgoing(ws, message);
   ws.send(JSON.stringify({ type, data: JSON.stringify(payload), id: 0 }));
 }
 
@@ -64,4 +73,16 @@ export function getRandomAvailableCell(board: Board): Cell | null {
   const randomIndex = Math.floor(Math.random() * availableCells.length);
   const targetCell = availableCells[randomIndex];
   return targetCell ?? null;
+}
+
+export function logIncoming(ws: WsWebSocket, message: unknown) {
+  const who = CONNECTIONS.get(ws);
+  console.log(`\n=== Incoming message from ${who || 'guest'} ===`);
+  console.log(JSON.stringify(message, null, 0));
+}
+
+export function logOutgoing(ws: WsWebSocket, message: unknown) {
+  const who = CONNECTIONS.get(ws);
+  console.log(`\n=== Outgoing message to ${who || 'guest'} ===`);
+  console.log(JSON.stringify(message, null, 0));
 }

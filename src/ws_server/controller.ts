@@ -22,6 +22,7 @@ import {
   findWs,
   createGamePlayer,
   getRandomAvailableCell,
+  logIncoming,
 } from './utils.js';
 import { botMakeMove, setupBotShips } from './bot.js';
 
@@ -277,6 +278,14 @@ function createSinglePlayerGame(ws: WsWebSocket) {
 
 export function handleCommand(ws: WsWebSocket, { type, data }: MsgEnvelope) {
   const dataParsed: unknown = data === '' ? '' : JSON.parse(data);
+
+  const message = {
+    type,
+    data: dataParsed,
+    id: 0,
+  };
+
+  logIncoming(ws, message);
   switch (type) {
     case 'reg':
       handleCmd(dataParsed, isRegRequestData, (data) => {
