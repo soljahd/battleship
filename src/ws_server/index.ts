@@ -1,57 +1,7 @@
 import { WebSocketServer, type WebSocket as WsWebSocket } from 'ws';
-
-function parseData<T>(data: unknown, typeGuard: (data: unknown) => data is T): T | null {
-  return typeGuard(data) ? data : null;
-}
-
-function isMsgEnvelope(data: unknown): data is MsgEnvelope {
-  return (
-    typeof data === 'object' &&
-    data !== null &&
-    'type' in data &&
-    typeof data.type === 'string' &&
-    'data' in data &&
-    typeof data.data === 'string' &&
-    'id' in data &&
-    data.id === 0
-  );
-}
-
-const CONNECTIONS: Map<WsWebSocket, string | null> = new Map();
-
-function handleCommand(ws: WsWebSocket, { type, data }: MsgEnvelope) {
-  const dataParsed: unknown = data === '' ? '' : JSON.parse(data);
-  console.log(ws, dataParsed);
-  switch (type) {
-    case 'reg': {
-      break;
-    }
-
-    case 'create_room': {
-      break;
-    }
-
-    case 'add_user_to_room': {
-      break;
-    }
-
-    case 'add_ships': {
-      break;
-    }
-
-    case 'attack': {
-      break;
-    }
-
-    case 'single_play': {
-      break;
-    }
-
-    default: {
-      break;
-    }
-  }
-}
+import { CONNECTIONS } from './db.js';
+import { isMsgEnvelope, parseData } from './typeGuard.js';
+import { handleCloseConnection, handleCommand } from './controller.js';
 
 export function startWebsocketServer(port: number) {
   const wss = new WebSocketServer({ port });
@@ -73,6 +23,8 @@ export function startWebsocketServer(port: number) {
 
     ws.on('close', () => {
       CONNECTIONS.delete(ws);
+      const user = CONNECTIONS.get(ws) || null;
+      handleCloseConnection(user);
     });
   });
 
