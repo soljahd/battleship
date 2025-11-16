@@ -41,3 +41,25 @@ export function createGamePlayer(userName: string, ws: WsWebSocket | null): Game
     board: createEmptyBoard(),
   };
 }
+
+export function getRandomAvailableCell(board: Board): Cell | null {
+  const availableCells: Cell[] = [];
+
+  for (let y = 0; y < board.length; y++) {
+    const row = board[y];
+    if (!row) continue;
+
+    for (let x = 0; x < row.length; x++) {
+      const cell = row[x];
+      if (cell === 'empty' || cell === 'ship') {
+        availableCells.push({ x, y });
+      }
+    }
+  }
+
+  if (availableCells.length === 0) return null;
+
+  const randomIndex = Math.floor(Math.random() * availableCells.length);
+  const targetCell = availableCells[randomIndex];
+  return targetCell ?? null;
+}

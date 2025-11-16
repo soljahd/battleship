@@ -53,12 +53,16 @@ type Room = {
   users: string[];
 };
 
+type CellState = 'empty' | 'ship' | 'hit' | 'miss' | 'killed';
+
+type Board = CellState[][];
+
 type GamePlayer = {
   userName: string;
   gamePlayerId: string;
   ws?: WsWebSocket | null;
   ships?: ShipInstance[];
-  board?: ('empty' | 'ship' | 'hit' | 'miss' | 'killed')[][];
+  board?: Board;
   isBot?: boolean;
 };
 
@@ -93,5 +97,10 @@ type AttackRequestData = {
   gameId: number | string;
   x: number;
   y: number;
+  indexPlayer: number | string;
+};
+
+type RandomAttackData = {
+  gameId: number | string;
   indexPlayer: number | string;
 };

@@ -5,6 +5,7 @@ import {
   isAddUserToRoomRequestData,
   isAddShipsRequestData,
   isAttackRequestData,
+  isRandomAttackData,
 } from './typeGuard.js';
 import { CONNECTIONS, deleteRoomByUser, GAMES, USERS, WAITING_ROOMS } from './db.js';
 import {
@@ -14,7 +15,14 @@ import {
   safeSetCell,
   getSurroundingUniqueCells,
 } from './gameController.js';
-import { send, updateRoomsBroadcast, updateWinnersBroadcast, findWs, createGamePlayer } from './utils.js';
+import {
+  send,
+  updateRoomsBroadcast,
+  updateWinnersBroadcast,
+  findWs,
+  createGamePlayer,
+  getRandomAvailableCell,
+} from './utils.js';
 
 function handleReg(ws: WsWebSocket, { name, password }: RegRequestData) {
   if (!name || !password) {
@@ -188,6 +196,27 @@ function finishGame(game: Game, winner: GamePlayer) {
   updateRoomsBroadcast(CONNECTIONS, WAITING_ROOMS);
 }
 
+function handleRandomAttack({ gameId, indexPlayer }: RandomAttackData) {
+  const game = GAMES.get(String(gameId));
+  if (!game || game.finished) return;
+
+  const attackerIndex = game.players.findIndex((player) => player.gamePlayerId === indexPlayer);
+  if (attackerIndex === -1) return;
+
+  const attackingPlayer = game.players[attackerIndex];
+  const defendingPlayer = game.players[1 - attackerIndex];
+  if (!attackingPlayer || !defendingPlayer) return;
+
+  if (game.currentPlayer !== attackingPlayer.gamePlayerId) return;
+
+  defendingPlayer.board ??= createEmptyBoard();
+
+  const targetCell = getRandomAvailableCell(defendingPlayer.board);
+  if (!targetCell) return;
+
+  handleAttack({ gameId, x: targetCell.x, y: targetCell.y, indexPlayer });
+}
+
 export function handleCommand(ws: WsWebSocket, { type, data }: MsgEnvelope) {
   const dataParsed: unknown = data === '' ? '' : JSON.parse(data);
   switch (type) {
@@ -210,6 +239,10 @@ export function handleCommand(ws: WsWebSocket, { type, data }: MsgEnvelope) {
     case 'attack':
       handleCmd(dataParsed, isAttackRequestData, handleAttack);
       break;
+    case 'randomAttack': {
+      handleCmd(dataParsed, isRandomAttackData, handleRandomAttack);
+      break;
+    }
     case 'single_play':
       break;
   }

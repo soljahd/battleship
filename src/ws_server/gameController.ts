@@ -6,7 +6,7 @@ export function safeSetCell(board: string[][], x: number, y: number, value: stri
   }
 }
 
-export function createEmptyBoard(): ('empty' | 'ship' | 'hit' | 'miss' | 'killed')[][] {
+export function createEmptyBoard(): Board {
   return Array.from({ length: BOARD_SIZE }, () => Array.from({ length: BOARD_SIZE }, () => 'empty'));
 }
 

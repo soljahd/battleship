@@ -86,3 +86,14 @@ export function isAttackRequestData(data: unknown): data is AttackRequestData {
     (typeof data.indexPlayer === 'number' || typeof data.indexPlayer === 'string')
   );
 }
+
+export function isRandomAttackData(data: unknown): data is RandomAttackData {
+  return (
+    data !== null &&
+    typeof data === 'object' &&
+    'gameId' in data &&
+    'indexPlayer' in data &&
+    (typeof data.gameId === 'number' || typeof data.gameId === 'string') &&
+    (typeof data.indexPlayer === 'number' || typeof data.indexPlayer === 'string')
+  );
+}
