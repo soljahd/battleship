@@ -12,33 +12,9 @@ import {
   buildShipCells,
   createEmptyBoard,
   safeSetCell,
-  surroundingCells,
-  uniqueCells,
+  getSurroundingUniqueCells,
 } from './gameController.js';
-
-function send(ws: WsWebSocket | null | undefined, type: string, payload: unknown) {
-  if (!ws) return;
-  ws.send(JSON.stringify({ type, data: JSON.stringify(payload), id: 0 }));
-}
-
-function broadcastToAll(type: string, payload: unknown) {
-  for (const ws of CONNECTIONS.keys()) {
-    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type, data: JSON.stringify(payload), id: 0 }));
-  }
-}
-
-function updateRoomsBroadcast() {
-  const list = Array.from(WAITING_ROOMS.values()).map((room) => ({
-    roomId: room.roomId,
-    roomUsers: room.users.map((user) => ({ name: user, index: user })),
-  }));
-  broadcastToAll('update_room', list);
-}
-
-function updateWinnersBroadcast() {
-  const arr = Array.from(USERS.values()).map((user) => ({ name: user.name, wins: user.wins }));
-  broadcastToAll('update_winners', arr);
-}
+import { send, updateRoomsBroadcast, updateWinnersBroadcast, findWs, createGamePlayer } from './utils.js';
 
 function handleReg(ws: WsWebSocket, { name, password }: RegRequestData) {
   if (!name || !password) {
@@ -58,9 +34,8 @@ function handleReg(ws: WsWebSocket, { name, password }: RegRequestData) {
   }
   CONNECTIONS.set(ws, name);
   send(ws, 'reg', { name, index: name, error: false, errorText: '' });
-  updateRoomsBroadcast();
-  updateWinnersBroadcast();
-  return;
+  updateRoomsBroadcast(CONNECTIONS, WAITING_ROOMS);
+  updateWinnersBroadcast(CONNECTIONS, USERS);
 }
 
 function handleCreateRoom(ws: WsWebSocket) {
@@ -70,216 +45,196 @@ function handleCreateRoom(ws: WsWebSocket) {
   if (existingRoom) return;
   const roomId = randomUUID();
   WAITING_ROOMS.set(roomId, { roomId, users: [who] });
-  updateRoomsBroadcast();
+  updateRoomsBroadcast(CONNECTIONS, WAITING_ROOMS);
 }
 
 function handleAddUserToRoom(ws: WsWebSocket, { indexRoom }: AddUserToRoomRequestData) {
   const who = CONNECTIONS.get(ws);
-  if (!who) return;
-  if (!indexRoom) return;
+  if (!who || !indexRoom) return;
   const room = WAITING_ROOMS.get(String(indexRoom));
-  if (!room) return;
-  if (room.users.includes(who)) return;
-  if (room.users.length >= 2) return;
+  if (!room || room.users.includes(who) || room.users.length >= 2) return;
   room.users.push(who);
   createGameFromRoom(room);
-  return;
 }
 
-export function createGameFromRoom(room: Room) {
-  const gameId = randomUUID();
+function createGameFromRoom(room: Room) {
+  if (room.users.length < 2) return;
   const [user1, user2] = room.users;
-  if (!user1 || !user2) return;
-  const gp1: GamePlayer = {
-    userName: user1,
-    gamePlayerId: randomUUID(),
-    ws: null,
-    board: createEmptyBoard(),
-    ships: [],
-  };
-  const gp2: GamePlayer = {
-    userName: user2,
-    gamePlayerId: randomUUID(),
-    ws: null,
-    board: createEmptyBoard(),
-    ships: [],
-  };
-  for (const [ws, name] of CONNECTIONS.entries()) {
-    if (name === user1) gp1.ws = ws;
-    if (name === user2) gp2.ws = ws;
-  }
-  const game: Game = { gameId: gameId, players: [gp1, gp2], currentPlayer: gp1.gamePlayerId };
+  if (!user1 || !user2) throw new Error('user1 and user2 not found');
+  const gp1: GamePlayer = createGamePlayer(user1, findWs(CONNECTIONS, user1));
+  const gp2: GamePlayer = createGamePlayer(user2, findWs(CONNECTIONS, user2));
+  const gameId = randomUUID();
+  const players: [GamePlayer, GamePlayer] = [gp1, gp2];
+  const game = { gameId, players, currentPlayer: gp1.gamePlayerId };
   GAMES.set(gameId, game);
-  for (const player of game.players)
-    send(player.ws, 'create_game', { idGame: game.gameId, idPlayer: player.gamePlayerId });
+  for (const player of game.players) {
+    send(player.ws, 'create_game', { idGame: gameId, idPlayer: player.gamePlayerId });
+  }
   WAITING_ROOMS.delete(room.roomId);
   deleteRoomByUser(user2);
-  updateRoomsBroadcast();
+  updateRoomsBroadcast(CONNECTIONS, WAITING_ROOMS);
   return game;
 }
 
 function handleAddShips({ gameId, ships, indexPlayer }: AddShipsRequestData) {
   const game = GAMES.get(String(gameId));
   if (!game) return;
-  const gamePlayer = game.players.find((player) => player.gamePlayerId === String(indexPlayer));
-  if (!gamePlayer) return;
-  gamePlayer.ships = ships.map((ship: ShipSpec) => ({
+  const player = game.players.find((player) => player.gamePlayerId === String(indexPlayer));
+  if (!player) return;
+  player.ships = ships.map((ship) => ({
     id: randomUUID(),
     type: ship.type,
     cells: buildShipCells(ship.position, ship.direction, ship.length),
     hits: [],
     sunk: false,
   }));
-  gamePlayer.board = gamePlayer.board ?? createEmptyBoard();
-
-  gamePlayer.board = gamePlayer.board ?? createEmptyBoard();
-
-  for (const ship of gamePlayer.ships ?? []) {
-    for (const cell of ship.cells) {
-      safeSetCell(gamePlayer.board, cell.x, cell.y, 'ship');
-    }
+  player.board = player.board ?? createEmptyBoard();
+  for (const ship of player.ships) {
+    for (const cell of ship.cells) safeSetCell(player.board, cell.x, cell.y, 'ship');
   }
 
   if (game.players.every((player) => player.ships && player.ships.length > 0)) {
     game.currentPlayer = Math.random() < 0.5 ? game.players[0].gamePlayerId : game.players[1].gamePlayerId;
     for (const player of game.players) {
-      send(player.ws, 'start_game', { ships: player.ships || [], currentPlayerIndex: game.currentPlayer });
-    }
-    for (const player of game.players) {
+      send(player.ws, 'start_game', { ships: player.ships, currentPlayerIndex: game.currentPlayer });
       send(player.ws, 'turn', { currentPlayer: game.currentPlayer });
     }
   }
-  return;
 }
 
 function handleAttack({ gameId, x, y, indexPlayer }: AttackRequestData) {
-  const attackerGpId = indexPlayer;
   const game = GAMES.get(String(gameId));
   if (!game || game.finished) return;
-  const attackerIdx = game.players.findIndex((player) => player.gamePlayerId === attackerGpId);
-  if (attackerIdx === -1) return;
-  const defenderIdx = attackerIdx === 0 ? 1 : 0;
-  const attacker = game.players[attackerIdx];
-  if (!attacker) throw new Error('attacker not found');
-  const defender = game.players[defenderIdx];
-  if (game.currentPlayer !== attackerGpId) return;
-  if (!defender.board) defender.board = createEmptyBoard();
-  if (!attacker.board) attacker.board = createEmptyBoard();
+
+  const attackerIndex = game.players.findIndex((player) => player.gamePlayerId === indexPlayer);
+  if (attackerIndex === -1) return;
+
+  const attackingPlayer = game.players[attackerIndex];
+  const defendingPlayer = game.players[1 - attackerIndex];
+  if (!attackingPlayer || !defendingPlayer) throw new Error('Attacker or defender not found');
+  if (game.currentPlayer !== attackingPlayer.gamePlayerId) return;
+
+  attackingPlayer.board ??= createEmptyBoard();
+  defendingPlayer.board ??= createEmptyBoard();
+
   if (x < 0 || x >= BOARD_SIZE || y < 0 || y >= BOARD_SIZE) return;
-  if (!defender.ships) throw new Error('Ships does not set');
+  if (!defendingPlayer.ships) return;
 
-  const ship = defender.ships.find((ship) => ship.cells.some((cell) => cell.x === x && cell.y === y));
-  if (ship) {
-    if (!ship.hits.some((h) => h.x === x && h.y === y)) ship.hits.push({ x, y });
-    if (defender.board[y] && defender.board[y][x]) defender.board[y][x] = 'hit';
-    if (ship.hits.length === ship.cells.length) {
-      ship.sunk = true;
-      const surrounds = uniqueCells(surroundingCells(ship.cells)).filter(
-        (cell) => !ship.cells.some((shipCell) => shipCell.x === cell.x && shipCell.y === cell.y),
+  const targetShip = defendingPlayer.ships.find((ship) => ship.cells.some((cell) => cell.x === x && cell.y === y));
+
+  if (targetShip) {
+    if (!targetShip.hits.some((hit) => hit.x === x && hit.y === y)) {
+      targetShip.hits.push({ x, y });
+    }
+
+    safeSetCell(defendingPlayer.board, x, y, 'hit');
+
+    if (targetShip.hits.length === targetShip.cells.length) {
+      targetShip.sunk = true;
+      for (const cell of targetShip.cells) {
+        safeSetCell(defendingPlayer.board, cell.x, cell.y, 'killed');
+      }
+      const surroundingCellsForShip = getSurroundingUniqueCells(targetShip.cells).filter(
+        (cell) => !targetShip.cells.some((shipCell) => shipCell.x === cell.x && shipCell.y === cell.y),
       );
-      for (const surround of surrounds) {
-        const row = defender.board[surround.y];
-        if (row && surround.x >= 0 && surround.x < row.length && row[surround.x] === 'empty')
-          safeSetCell(defender.board, surround.x, surround.y, 'miss');
-
-        for (const player of game.players)
-          send(player.ws, 'attack', { position: surround, currentPlayer: attacker.gamePlayerId, status: 'miss' });
+      for (const cell of surroundingCellsForShip) {
+        safeSetCell(defendingPlayer.board, cell.x, cell.y, 'miss');
       }
-      for (const cell of ship.cells) {
-        safeSetCell(defender.board, cell.x, cell.y, 'killed');
-        for (const player of game.players)
-          send(player.ws, 'attack', { position: cell, currentPlayer: attacker.gamePlayerId, status: 'killed' });
-      }
-
-      const defenderAlive = defender.ships.some((ship) => !ship.sunk);
-      if (!defenderAlive) {
-        game.finished = true;
-        for (const player of game.players) send(player.ws, 'finish', { winPlayer: attacker.gamePlayerId });
-        const rec = USERS.get(attacker.userName);
-        if (rec) rec.wins = (rec.wins || 0) + 1;
-        GAMES.delete(String(gameId));
-        updateWinnersBroadcast();
-        updateRoomsBroadcast();
-        return;
-      } else {
-        for (const player of game.players) send(player.ws, 'turn', { currentPlayer: game.currentPlayer });
+      sendAttackToAll(game, attackingPlayer, targetShip.cells, 'killed');
+      sendAttackToAll(game, attackingPlayer, surroundingCellsForShip, 'miss');
+      const isDefenderAlive = defendingPlayer.ships.some((ship) => !ship.sunk);
+      if (!isDefenderAlive) {
+        finishGame(game, attackingPlayer);
         return;
       }
     } else {
-      for (const player of game.players)
-        send(player.ws, 'attack', { position: { x, y }, currentPlayer: attacker.gamePlayerId, status: 'shot' });
-      for (const player of game.players) send(player.ws, 'turn', { currentPlayer: game.currentPlayer });
-      return;
+      sendAttackToAll(game, attackingPlayer, [{ x, y }], 'shot');
     }
+    broadcastTurn(game);
   } else {
-    if (defender.board[y] && defender.board[y][x] === 'empty') defender.board[y][x] = 'miss';
-    for (const player of game.players)
-      send(player.ws, 'attack', { position: { x, y }, currentPlayer: attacker.gamePlayerId, status: 'miss' });
-    game.currentPlayer = defender.gamePlayerId;
-    for (const player of game.players) send(player.ws, 'turn', { currentPlayer: game.currentPlayer });
+    safeSetCell(defendingPlayer.board, x, y, 'miss');
+    sendAttackToAll(game, attackingPlayer, [{ x, y }], 'miss');
+    game.currentPlayer = defendingPlayer.gamePlayerId;
+    broadcastTurn(game);
   }
+}
+
+function sendAttackToAll(
+  game: Game,
+  attacker: GamePlayer,
+  cells: { x: number; y: number }[],
+  status: 'miss' | 'shot' | 'killed',
+) {
+  for (const cell of cells) {
+    for (const player of game.players) {
+      send(player.ws, 'attack', { position: cell, currentPlayer: attacker.gamePlayerId, status });
+    }
+  }
+}
+
+function broadcastTurn(game: Game) {
+  for (const player of game.players) {
+    send(player.ws, 'turn', { currentPlayer: game.currentPlayer });
+  }
+}
+
+function finishGame(game: Game, winner: GamePlayer) {
+  game.finished = true;
+  for (const player of game.players) send(player.ws, 'finish', { winPlayer: winner.gamePlayerId });
+  const rec = USERS.get(winner.userName);
+  if (rec) rec.wins += 1;
+  GAMES.delete(game.gameId);
+  updateWinnersBroadcast(CONNECTIONS, USERS);
+  updateRoomsBroadcast(CONNECTIONS, WAITING_ROOMS);
 }
 
 export function handleCommand(ws: WsWebSocket, { type, data }: MsgEnvelope) {
   const dataParsed: unknown = data === '' ? '' : JSON.parse(data);
   switch (type) {
-    case 'reg': {
-      const data = parseData<RegRequestData>(dataParsed, isRegRequestData);
-      if (data) handleReg(ws, data);
+    case 'reg':
+      handleCmd(dataParsed, isRegRequestData, (data) => {
+        handleReg(ws, data);
+      });
       break;
-    }
-
-    case 'create_room': {
+    case 'create_room':
       handleCreateRoom(ws);
       break;
-    }
-
-    case 'add_user_to_room': {
-      const data = parseData<AddUserToRoomRequestData>(dataParsed, isAddUserToRoomRequestData);
-      if (data) handleAddUserToRoom(ws, data);
+    case 'add_user_to_room':
+      handleCmd(dataParsed, isAddUserToRoomRequestData, (data) => {
+        handleAddUserToRoom(ws, data);
+      });
       break;
-    }
-
-    case 'add_ships': {
-      const data = parseData<AddShipsRequestData>(dataParsed, isAddShipsRequestData);
-      if (data) handleAddShips(data);
+    case 'add_ships':
+      handleCmd(dataParsed, isAddShipsRequestData, handleAddShips);
       break;
-    }
-
-    case 'attack': {
-      const data = parseData<AttackRequestData>(dataParsed, isAttackRequestData);
-      if (data) handleAttack(data);
+    case 'attack':
+      handleCmd(dataParsed, isAttackRequestData, handleAttack);
       break;
-    }
-
-    case 'single_play': {
+    case 'single_play':
       break;
-    }
-
-    default: {
-      break;
-    }
   }
 }
 
+function handleCmd<T>(data: unknown, guard: (data: unknown) => data is T, handler: (data: T) => void) {
+  const parsed = parseData(data, guard);
+  if (parsed) handler(parsed);
+}
+
 export function handleCloseConnection(user: string | null) {
-  if (user) {
-    for (const [roomId, room] of WAITING_ROOMS.entries()) if (room.users.includes(user)) WAITING_ROOMS.delete(roomId);
-    for (const [gameId, game] of GAMES.entries()) {
-      const playerIdx = game.players.findIndex((player) => player.userName === user);
-      if (playerIdx >= 0) {
-        const opponentIdx = playerIdx === 0 ? 1 : 0;
-        const opponent = game.players[opponentIdx];
-        if (!game.finished) {
-          game.finished = true;
-          send(opponent.ws, 'finish', { winPlayer: opponent.gamePlayerId });
-          const rec = USERS.get(opponent.userName);
-          if (rec) rec.wins = (rec.wins || 0) + 1;
-        }
-        GAMES.delete(gameId);
+  if (!user) return;
+  for (const [roomId, room] of WAITING_ROOMS.entries()) {
+    if (room.users.includes(user)) WAITING_ROOMS.delete(roomId);
+  }
+  for (const [gameId, game] of GAMES.entries()) {
+    const playerIdx = game.players.findIndex((player) => player.userName === user);
+    if (playerIdx >= 0) {
+      const opponent = game.players[1 - playerIdx];
+      if (!game.finished && opponent) {
+        finishGame(game, opponent);
       }
+      GAMES.delete(gameId);
     }
   }
-  updateWinnersBroadcast();
-  updateRoomsBroadcast();
+  updateWinnersBroadcast(CONNECTIONS, USERS);
+  updateRoomsBroadcast(CONNECTIONS, WAITING_ROOMS);
 }

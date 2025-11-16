@@ -22,8 +22,8 @@ export function startWebsocketServer(port: number) {
     });
 
     ws.on('close', () => {
-      CONNECTIONS.delete(ws);
       const user = CONNECTIONS.get(ws) || null;
+      CONNECTIONS.delete(ws);
       handleCloseConnection(user);
     });
   });

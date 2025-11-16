@@ -26,16 +26,18 @@ export function uniqueCells(cells: Cell[]): Cell[] {
   return Array.from(map.values());
 }
 
-export function surroundingCells(cells: Cell[]): Cell[] {
-  const set = new Map<string, Cell>();
+export function getSurroundingUniqueCells(cells: Cell[]): Cell[] {
+  const allSurrounding: Cell[] = [];
   for (const { x, y } of cells) {
-    for (let dx = -1; dx <= 1; dx++)
+    for (let dx = -1; dx <= 1; dx++) {
       for (let dy = -1; dy <= 1; dy++) {
         const nx = x + dx;
         const ny = y + dy;
-        if (nx >= 0 && nx < BOARD_SIZE && ny >= 0 && ny < BOARD_SIZE)
-          set.set(`${String(nx)},${String(ny)}`, { x: nx, y: ny });
+        if (nx >= 0 && nx < 10 && ny >= 0 && ny < 10) {
+          allSurrounding.push({ x: nx, y: ny });
+        }
       }
+    }
   }
-  return Array.from(set.values());
+  return uniqueCells(allSurrounding);
 }
