@@ -23,6 +23,7 @@ import {
   createGamePlayer,
   getRandomAvailableCell,
 } from './utils.js';
+import { botMakeMove, setupBotShips } from './bot.js';
 
 function handleReg(ws: WsWebSocket, { name, password }: RegRequestData) {
   if (!name || !password) {
@@ -101,16 +102,25 @@ function handleAddShips({ gameId, ships, indexPlayer }: AddShipsRequestData) {
     for (const cell of ship.cells) safeSetCell(player.board, cell.x, cell.y, 'ship');
   }
 
+  const botPlayer = game.players.find((player) => player.isBot);
+  if (botPlayer && (!botPlayer.ships || botPlayer.ships.length === 0)) {
+    setupBotShips(botPlayer);
+  }
+
   if (game.players.every((player) => player.ships && player.ships.length > 0)) {
     game.currentPlayer = Math.random() < 0.5 ? game.players[0].gamePlayerId : game.players[1].gamePlayerId;
     for (const player of game.players) {
       send(player.ws, 'start_game', { ships: player.ships, currentPlayerIndex: game.currentPlayer });
-      send(player.ws, 'turn', { currentPlayer: game.currentPlayer });
+      if (!player.isBot) send(player.ws, 'turn', { currentPlayer: game.currentPlayer });
+    }
+
+    if (game.players.find((player) => player.gamePlayerId === game.currentPlayer)?.isBot) {
+      botMakeMove(game);
     }
   }
 }
 
-function handleAttack({ gameId, x, y, indexPlayer }: AttackRequestData) {
+export function handleAttack({ gameId, x, y, indexPlayer }: AttackRequestData) {
   const game = GAMES.get(String(gameId));
   if (!game || game.finished) return;
 
@@ -129,6 +139,7 @@ function handleAttack({ gameId, x, y, indexPlayer }: AttackRequestData) {
   if (!defendingPlayer.ships) return;
 
   const targetShip = defendingPlayer.ships.find((ship) => ship.cells.some((cell) => cell.x === x && cell.y === y));
+  let wasHit = false;
 
   if (targetShip) {
     if (!targetShip.hits.some((hit) => hit.x === x && hit.y === y)) {
@@ -136,6 +147,7 @@ function handleAttack({ gameId, x, y, indexPlayer }: AttackRequestData) {
     }
 
     safeSetCell(defendingPlayer.board, x, y, 'hit');
+    wasHit = true;
 
     if (targetShip.hits.length === targetShip.cells.length) {
       targetShip.sunk = true;
@@ -158,12 +170,25 @@ function handleAttack({ gameId, x, y, indexPlayer }: AttackRequestData) {
     } else {
       sendAttackToAll(game, attackingPlayer, [{ x, y }], 'shot');
     }
-    broadcastTurn(game);
   } else {
     safeSetCell(defendingPlayer.board, x, y, 'miss');
     sendAttackToAll(game, attackingPlayer, [{ x, y }], 'miss');
+    wasHit = false;
+  }
+  if (wasHit) {
+    if (attackingPlayer.isBot) {
+      botMakeMove(game);
+    } else {
+      broadcastTurn(game);
+    }
+  } else {
     game.currentPlayer = defendingPlayer.gamePlayerId;
-    broadcastTurn(game);
+
+    if (defendingPlayer.isBot) {
+      botMakeMove(game);
+    } else {
+      broadcastTurn(game);
+    }
   }
 }
 
@@ -217,6 +242,39 @@ function handleRandomAttack({ gameId, indexPlayer }: RandomAttackData) {
   handleAttack({ gameId, x: targetCell.x, y: targetCell.y, indexPlayer });
 }
 
+function createSinglePlayerGame(ws: WsWebSocket) {
+  const playerName = CONNECTIONS.get(ws);
+  if (!playerName) return;
+  const gameId = crypto.randomUUID();
+
+  const humanPlayer: GamePlayer = {
+    userName: playerName,
+    gamePlayerId: crypto.randomUUID(),
+    ws: USERS.get(playerName)?.ws ?? null,
+    board: createEmptyBoard(),
+    ships: [],
+  };
+
+  const botPlayer: GamePlayer = {
+    userName: 'BOT',
+    gamePlayerId: crypto.randomUUID(),
+    board: createEmptyBoard(),
+    ships: [],
+    isBot: true,
+  };
+
+  const game: Game = {
+    gameId,
+    players: [humanPlayer, botPlayer],
+    currentPlayer: humanPlayer.gamePlayerId,
+  };
+
+  GAMES.set(gameId, game);
+  send(humanPlayer.ws, 'create_game', { idGame: gameId, idPlayer: humanPlayer.gamePlayerId });
+
+  return game;
+}
+
 export function handleCommand(ws: WsWebSocket, { type, data }: MsgEnvelope) {
   const dataParsed: unknown = data === '' ? '' : JSON.parse(data);
   switch (type) {
@@ -239,11 +297,11 @@ export function handleCommand(ws: WsWebSocket, { type, data }: MsgEnvelope) {
     case 'attack':
       handleCmd(dataParsed, isAttackRequestData, handleAttack);
       break;
-    case 'randomAttack': {
+    case 'randomAttack':
       handleCmd(dataParsed, isRandomAttackData, handleRandomAttack);
       break;
-    }
     case 'single_play':
+      createSinglePlayerGame(ws);
       break;
   }
 }

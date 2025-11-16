@@ -104,3 +104,5 @@ type RandomAttackData = {
   gameId: number | string;
   indexPlayer: number | string;
 };
+
+type ShipSet = Omit<Ship, 'position' | 'direction'>[];
